@@ -1,0 +1,20 @@
+# Core
+numpy==2.2.2
+torch==2.4.1
+pandas==2.2.3
+pyrallis==0.3.1
+PyYAML==6.0.2
+tqdm==4.66.5
+matplotlib==3.10.0
+
+# Optional: experiment logging (train scripts run without it; enable with --use_wandb True)
+wandb
+
+# Optional: CP baseline (evaluation/ortools_solver.py)
+ortools==9.11.4210
+
+# Optional: dataset download from HuggingFace (scripts/download_datasets.py)
+huggingface_hub
+
+# For a CUDA build of torch, install instead e.g.:
+#   pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu126

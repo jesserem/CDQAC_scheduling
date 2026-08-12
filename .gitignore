@@ -1,0 +1,30 @@
+# Byte-compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.env/
+.venv/
+
+# IDE/editor files
+.vscode/
+.idea/
+
+# Experiment outputs
+checkpoints*/
+results*/
+wandb/
+*.log
+slurm-*.out
+
+# Datasets (download from HuggingFace or regenerate, see README)
+dataset/
+jsp_dataset/
+GA_data/
+
+# OS files
+.DS_Store
+Thumbs.db
