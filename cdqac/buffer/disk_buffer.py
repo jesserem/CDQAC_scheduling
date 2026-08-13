@@ -1,4 +1,4 @@
-"""Disk-backed replay buffer + PyTorch Dataset/DataLoader pipeline for TD3-AWR.
+"""Disk-backed replay buffer + PyTorch Dataset/DataLoader pipeline.
 
 The big per-transition state arrays (fea_j, comp_idx, fea_pairs, ...) are stored
 in numpy memmaps on disk instead of RAM, so dataset size is bounded by disk, not
@@ -27,6 +27,8 @@ page cache -- catastrophic on network filesystems (NFS/Lustre). For that regime:
 Batches have the exact ``Buffer.sample_td3`` format:
     state(8-tuple), next_state(8-tuple), actions, next_actions, rewards, dones,
     mc_returns
+or, with ``td3_format=False``, the ``Buffer.sample`` format:
+    state(8-tuple), next_state(8-tuple), actions, rewards, dones, mc_returns
 """
 
 import mmap
@@ -220,9 +222,15 @@ class TD3TransitionDataset(Dataset):
     only) -- use it with fully-random sampling (chunk_len == 1) on datasets
     larger than RAM, where readahead only wastes disk bandwidth. Leave it off
     for chunked/sequential access.
+
+    ``td3_format=True`` (default) yields ``Buffer.sample_td3``-format batches
+    (with next_actions); ``td3_format=False`` yields ``Buffer.sample``-format
+    batches, as consumed by CDQAC, IQL, dmSAC, mQRDQN and BC.
     """
 
-    def __init__(self, buffer: DiskBuffer, madvise_random: bool = False):
+    def __init__(self, buffer: DiskBuffer, madvise_random: bool = False,
+                 td3_format: bool = True):
+        self.td3_format = td3_format
         self.dir_path = buffer.dir_path
         self.field_specs = dict(buffer.field_specs)
         self.n = buffer.curr_size
@@ -301,12 +309,14 @@ class TD3TransitionDataset(Dataset):
         state = self._read_state(idx)
         next_state = self._read_state(nxt)
         actions = torch.from_numpy(self.action[idx])
-        next_actions = torch.from_numpy(self.action[nxt])
         rewards = torch.from_numpy(self.reward[idx])
         dones = torch.from_numpy(self.done[idx])
         mc_returns = torch.from_numpy(self.mc_return[idx])
 
-        return state, next_state, actions, next_actions, rewards, dones, mc_returns
+        if self.td3_format:
+            next_actions = torch.from_numpy(self.action[nxt])
+            return state, next_state, actions, next_actions, rewards, dones, mc_returns
+        return state, next_state, actions, rewards, dones, mc_returns
 
 
 class RandomBatchSampler(Sampler):
@@ -402,10 +412,13 @@ def make_td3_dataloader(dataset: TD3TransitionDataset, sampler: Sampler,
 
 
 def batch_to_device(batch, device: str, non_blocking: bool = True):
-    state, next_state, actions, next_actions, rewards, dones, mc_returns = batch
+    """Move a batch (in either the sample_td3 or the sample format) to device.
 
+    The DataLoader's pin_memory pass may turn the inner state tuples into
+    lists, so recurse over both and rebuild tuples."""
     def mv(t):
+        if isinstance(t, (list, tuple)):
+            return tuple(mv(x) for x in t)
         return t.to(device, non_blocking=non_blocking)
 
-    return (tuple(mv(t) for t in state), tuple(mv(t) for t in next_state),
-            mv(actions), mv(next_actions), mv(rewards), mv(dones), mv(mc_returns))
+    return tuple(mv(t) for t in batch)

@@ -1,39 +1,19 @@
+"""IQL — Implicit Q-Learning (discrete, masked FJSP action space).
+
+Standard IQL trio of updates per step: an expectile-regressed value net, a
+smooth-L1 TD update of the critic ensemble toward ``r + gamma * V(s')``, and
+an advantage-weighted-regression (AWR) actor update.
+"""
 import torch
 import torch.nn as nn
-from typing import Optional
-from torch.optim.lr_scheduler import CosineAnnealingLR
 
-def asymmetric_l2_loss(u: torch.Tensor, tau: float) -> torch.Tensor:
-    return torch.mean(torch.abs(tau - (u < 0).float()) * u**2)
+from cdqac.methods.base import BaseMethod
+from cdqac.methods.util import asymmetric_l2_loss, get_min_q
 
 
-def get_min_q(quantiles):
-    # Stack the quantile tensors along a new dimension (dim=2)
-    # Each tensor is assumed to have shape [B, ..., D]
-    # The stacked tensor will have shape [B, ..., N, D] where N is the number of tensors.
-    stacked_quantiles = torch.stack(quantiles, dim=2)
+class IQL(BaseMethod):
+    """Implicit Q-Learning trainer."""
 
-    # Compute the mean along the last dimension (D) for each tensor
-    # This yields a tensor of shape [B, ..., N]
-    q_means = stacked_quantiles.mean(dim=-1)
-
-    # Find the index with the minimum mean for each element along the batch and other dimensions.
-    # The result, arg_q, has shape [B, ..., 1]
-    arg_q = torch.argmin(q_means, dim=2, keepdim=True)
-
-    # Gather the quantile tensor corresponding to the minimum mean
-    # We need to expand the index tensor to match the shape of the last dimension for gathering.
-    min_quantile = torch.gather(
-        stacked_quantiles,
-        2,
-        arg_q.unsqueeze(-1).expand(-1, -1, -1, stacked_quantiles.shape[-1])
-    ).squeeze(2)  # Removing the extra dimension added for stacking
-
-    return min_quantile
-
-
-
-class IQL:
     def __init__(
             self,
             actor_net: nn.Module,
@@ -51,15 +31,34 @@ class IQL:
             beta: float = 5.0,
             max_grad_norm: float = 1.0,
             device: str = "cpu",
-
     ):
+        """
+        Args:
+            actor_net: Masked-softmax policy network.
+            q_net: Critic ensemble (scalar Q per action).
+            target_net: Target copy of ``q_net``.
+            value_net: State-value network V(s).
+            value_optimizer: Optimizer for ``value_net``.
+            actor_optimizer: Optimizer for ``actor_net``.
+            q_optimizer: Optimizer for ``q_net``.
+            target_update_freq: Polyak-update the critic target every n steps.
+            update_freq_policy: Accepted for API compatibility (the actor is
+                updated every step).
+            discount: Discount factor gamma.
+            tau: Polyak averaging rate.
+            iql_tau: Expectile of the value regression.
+            beta: Inverse temperature of the AWR weight ``exp(beta * adv)``.
+            max_grad_norm: Gradient-norm clip.
+            device: Torch device string.
+        """
+        super().__init__(discount=discount, tau=tau,
+                         target_update_freq=target_update_freq,
+                         max_grad_norm=max_grad_norm, device=device)
         self.actor_net = actor_net
         self.q_net = q_net
-
         self.target_net = target_net
         self.value_net = value_net
 
-        self.tau = tau
         self.iql_tau = iql_tau
         self.beta = beta
 
@@ -67,19 +66,10 @@ class IQL:
         self.q_optimizer = q_optimizer
         self.value_optimizer = value_optimizer
 
-        self.target_update_freq = target_update_freq
         self.update_freq_policy = update_freq_policy
-        self.max_grad_norm = max_grad_norm
-        self.discount = discount
-
-        # self.beta = beta
-        # self.iql_tau = iql_tau
-        self.device = device
-        self.n_updates = 0
-        self.n_updates_policy = 0
-
 
     def _q_loss(self, state, actions, rewards, dones, next_v, log_dict):
+        """Smooth-L1 TD update of every critic toward ``r + gamma * V(s')``."""
         target = rewards + (1 - dones) * self.discount * next_v.detach()
         q_val, _ = self.q_net(*state)
         q_loss = 0
@@ -88,54 +78,28 @@ class IQL:
             log_dict["q_val_" + str(i)] = q_val_i.mean().item()
             q_loss_i = torch.nn.functional.smooth_l1_loss(q_val_i, target)
             q_loss += q_loss_i
-        self.q_optimizer.zero_grad()
-        q_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.q_net.parameters(), self.max_grad_norm)
-        self.q_optimizer.step()
+        self._optimize(self.q_optimizer, q_loss, self.q_net)
         log_dict["q_loss"] = q_loss.item()
 
-
-
-    # def _policy_loss(self, state, adv, actions, log_dict):
-    #     action_probs, _ = self.actor_net(*state)
-    #     action_dist = torch.distributions.Categorical(action_probs)
-    #     exp_adv = torch.exp(self.beta * adv.detach()).clamp(max=100)
-    #     bc_loss = -action_dist.log_prob(actions.squeeze(-1)).unsqueeze(-1)
-    #     p_loss = (bc_loss * exp_adv).mean()
-    #     self.actor_optimizer.zero_grad()
-    #     p_loss.backward()
-    #     torch.nn.utils.clip_grad_norm_(self.actor_net.parameters(), self.max_grad_norm)
-    #     self.actor_optimizer.step()
-    #     log_dict["policy_loss"] = p_loss.item()
-    #     log_dict["bc_loss"] = bc_loss.mean().item()
-    #     log_dict["exp_adv"] = exp_adv.mean().item()
-    #     entropy = action_dist.entropy().mean()
-    #     log_dict["entropy"] = entropy.item()
     def _policy_loss(self, state, adv, actions, log_dict):
+        """AWR actor update: log-likelihood weighted by ``exp(beta * adv)``."""
         action_probs, _ = self.actor_net(*state)
         action_dist = torch.distributions.Categorical(action_probs)
-        # print("action_probs", action_probs.shape)
-        # print("adv", adv.shape)
-        # adv = torch.nan_to_num(adv, 0)
-        # p_loss = torch.sum(action_probs * -adv, dim=-1)
 
         exp_adv = torch.exp(self.beta * adv.detach()).clamp(max=100)
         bc_loss = -action_dist.log_prob(actions.squeeze(-1)).unsqueeze(-1)
         p_loss = (bc_loss * exp_adv).mean()
-        # print(p_loss)
-        p_loss = torch.mean(p_loss)
-        self.actor_optimizer.zero_grad()
-        p_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.actor_net.parameters(), self.max_grad_norm)
-        self.actor_optimizer.step()
+        self._optimize(self.actor_optimizer, p_loss, self.actor_net)
         log_dict["policy_loss"] = p_loss.item()
-        # log_dict["bc_loss"] = bc_loss.mean().item()
-        # log_dict["exp_adv"] = exp_adv.mean().item()
         entropy = action_dist.entropy().mean()
         log_dict["entropy"] = entropy.item()
 
-
     def _value_loss(self, state, actions, log_dict):
+        """Expectile regression of V(s) toward the pessimistic target critic.
+
+        Returns:
+            The advantage ``min_i Q_i(s, a_data) - V(s)`` used by the actor.
+        """
         with torch.no_grad():
             q_val, _ = self.target_net(*state)
             q_val = get_min_q(q_val).squeeze(-1)
@@ -144,20 +108,22 @@ class IQL:
         val = self.value_net(*state)
         adv = q_val_loss - val
 
-
         val_loss = asymmetric_l2_loss(adv, self.iql_tau)
-        self.value_optimizer.zero_grad()
-        val_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.value_net.parameters(), self.max_grad_norm)
-        self.value_optimizer.step()
+        self._optimize(self.value_optimizer, val_loss, self.value_net)
         log_dict["value_loss"] = val_loss.item()
         log_dict["adv"] = adv.mean().item()
         return adv
 
+    def train(self, batch) -> dict:
+        """One IQL step: value, critic and actor updates.
 
+        Args:
+            batch: ``(state, next_state, actions, rewards, dones, mc_returns)``
+                as produced by ``Buffer.sample`` / ``Buffer.epoch_generator``.
 
-
-    def train(self, batch):
+        Returns:
+            Dict of scalar training statistics.
+        """
         self.n_updates += 1
         log_dict = {}
         state, next_state, actions, rewards, dones, mc_returns = batch
@@ -171,13 +137,3 @@ class IQL:
         if self.n_updates % self.target_update_freq == 0:
             self.update_target()
         return log_dict
-
-
-    def update_target(self):
-        for target_param, param in zip(self.target_net.parameters(), self.q_net.parameters()):
-            target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
-
-    def get_dict(self):
-        return {
-            "actor_net": self.actor_net.state_dict(),
-        }

@@ -12,6 +12,8 @@ venv/
 # IDE/editor files
 .vscode/
 .idea/
+train_dataset*/
+data*/
 
 # Experiment outputs
 checkpoints*/

@@ -1,6 +1,5 @@
-from typing import List, Dict, Any, Tuple, Optional
-import pyrallis
-from dataclasses import asdict, dataclass
+from typing import List, Optional
+from dataclasses import dataclass
 import uuid
 
 @dataclass
@@ -11,15 +10,10 @@ class TrainConfig:
 
 
     # Data collection
-    use_baseline: bool = False
-    data_path: str = "./dataset"
-    train_instance: str = "SD1_train_10_5_1000.npy"
-    train_instance_2: str = "SD1_train_10_5_250.npy"
-    eval_instance: str = "SD1_10_5_val.npy"
-    eval_instance_2: str = "SD1_10_5_val.npy"
+    data_path: str = "./train_dataset/fjsp"
+    train_instance: str = "train_10_5.npy"
+    eval_instance: str = "val_10_5.npy"
 
-    normalize: bool = False
-    type_div: Optional[str] = "scale"
     eval_every_epoch: int = 1
 
     train_epochs: int = 1000
@@ -42,12 +36,10 @@ class TrainConfig:
     layer_norm: bool = True          # ReBRAC: LayerNorm in the critic MLPs
     dropout_prob_actor: float = 0
     dropout_prob_q: float = 0
-    dropout_prob_value: float = 0
 
     use_mask: bool = True
 
     # Target network / optimisation
-    n_step: int = 1
     target_update_freq: int = 1
     tau: float = 0.005
 
@@ -102,7 +94,6 @@ class TrainConfig:
     seed: int = 1
     reward_scale: float = 1
     reward_bias: float = 0
-    anneal_lr: bool = False
 
     remove_duplicate: bool = True
 

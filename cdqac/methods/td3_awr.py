@@ -34,12 +34,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from cdqac.methods.base import BaseMethod
+from cdqac.methods.util import asymmetric_l2_loss, soft_update
 
-def asymmetric_l2_loss(u: torch.Tensor, tau: float) -> torch.Tensor:
-    return torch.mean(torch.abs(tau - (u < 0).float()) * u ** 2)
 
+class TD3AWR(BaseMethod):
+    """TD3-AWR trainer (see module docstring for the full recipe)."""
 
-class TD3AWR:
     def __init__(
             self,
             actor_net: nn.Module,
@@ -70,6 +71,41 @@ class TD3AWR:
             max_grad_norm: float = 1.0,
             device: str = "cpu",
     ):
+        """
+        Args:
+            actor_net: Masked-softmax policy network.
+            target_actor_net: Target copy of the actor (TD3 smoothing).
+            q_net: Twin-critic ensemble (scalar Q per action).
+            target_net: Target copy of ``q_net``.
+            value_net: State-value network V(s) for the AWR weight.
+            actor_optimizer: Optimizer for ``actor_net``.
+            q_optimizer: Optimizer for ``q_net``.
+            value_optimizer: Optimizer for ``value_net``.
+            target_update_freq: Polyak-update the critic target every n steps.
+            update_freq_policy: Actor (and actor-target) update delay.
+            discount: Discount factor gamma.
+            tau: Polyak averaging rate.
+            awr_temperature: eta in the AWR weight ``exp(eta * adv)``.
+            awr_adv_clip: Upper clip A_max of the AWR weight.
+            value_expectile: Expectile of the value regression.
+            beta_q: Weight of the DPG (Q-maximisation) actor term.
+            beta_bc: Weight of the AWR behavioral-cloning actor term.
+            normalize_q_loss: Scale the DPG term by 1 / mean|Q| (ReBRAC).
+            critic_bc_coef: alpha_c of the critic-side BC penalty.
+            critic_bc_soft: Soft (L2 to the target-policy distribution) vs
+                hard (one-hot disagreement) critic BC penalty.
+            policy_noise: Std of the target-policy smoothing noise.
+            noise_clip: Clip range of the smoothing noise.
+            bc_distance: "ce" for cross-entropy BC distance, otherwise an L2
+                distance on the Gumbel-softmax relaxation.
+            pre_activ_reg: Weight of the pre-activation regulariser.
+            gumbel_tau: Temperature of the Gumbel-softmax relaxation.
+            max_grad_norm: Gradient-norm clip.
+            device: Torch device string.
+        """
+        super().__init__(discount=discount, tau=tau,
+                         target_update_freq=target_update_freq,
+                         max_grad_norm=max_grad_norm, device=device)
         self.actor_net = actor_net
         self.target_actor_net = target_actor_net
         self.q_net = q_net
@@ -80,10 +116,7 @@ class TD3AWR:
         self.q_optimizer = q_optimizer
         self.value_optimizer = value_optimizer
 
-        self.target_update_freq = target_update_freq
         self.update_freq_policy = update_freq_policy
-        self.discount = discount
-        self.tau = tau
 
         self.awr_temperature = awr_temperature
         self.awr_adv_clip = awr_adv_clip
@@ -98,10 +131,6 @@ class TD3AWR:
         self.bc_distance = bc_distance
         self.pre_activ_reg = pre_activ_reg
         self.gumbel_tau = gumbel_tau
-        self.max_grad_norm = max_grad_norm
-
-        self.device = device
-        self.n_updates = 0
 
     # ------------------------------------------------------------------ #
     def _min_q_gather(self, q_net: nn.Module, state, actions: torch.Tensor) -> torch.Tensor:
@@ -122,6 +151,7 @@ class TD3AWR:
     # ------------------------------------------------------------------ #
     def _critic_loss(self, state, next_state, actions, next_actions, rewards, dones,
                      next_mask_flat, log_dict):
+        """Twin-critic MSE update toward the ReBRAC BC-penalised TD3 target."""
         with torch.no_grad():
             # MR.Q Eq. 18: a~' = argmax( pi'(s') + clip(eps, -c, c) ) over feasible pairs
             next_probs, _ = self.target_actor_net(*next_state)
@@ -154,29 +184,25 @@ class TD3AWR:
             log_dict["q_val_" + str(i)] = q_a.mean().item()
             q_loss = q_loss + F.mse_loss(q_a, target)
 
-        self.q_optimizer.zero_grad()
-        q_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.q_net.parameters(), self.max_grad_norm)
-        self.q_optimizer.step()
+        self._optimize(self.q_optimizer, q_loss, self.q_net)
 
         log_dict["q_loss"] = q_loss.item()
         log_dict["mean_target"] = target.mean().item()
         log_dict["critic_bc_pen"] = bc_pen.mean().item()
 
     def _value_loss(self, state, q_data, log_dict):
+        """Expectile regression of V(s) toward min_i Q_i(s, a_data)."""
         v = self.value_net(*state)
         adv_v = q_data - v
         value_loss = asymmetric_l2_loss(adv_v, self.value_expectile)
 
-        self.value_optimizer.zero_grad()
-        value_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.value_net.parameters(), self.max_grad_norm)
-        self.value_optimizer.step()
+        self._optimize(self.value_optimizer, value_loss, self.value_net)
 
         log_dict["value_loss"] = value_loss.item()
         log_dict["value_mean"] = v.mean().item()
 
     def _actor_loss(self, state, actions, q_data, mask_flat, log_dict):
+        """Actor update: DPG through Gumbel-softmax + AWR-weighted BC term."""
         z_pre, logits = self._actor_logits(state, mask_flat)
 
         # DPG term through straight-through Gumbel-softmax (MR.Q Eq. 20).
@@ -212,10 +238,7 @@ class TD3AWR:
         pre_reg = self.pre_activ_reg * z_pre.pow(2).mean()
         actor_loss = self.beta_q * q_loss + self.beta_bc * bc_loss + pre_reg
 
-        self.actor_optimizer.zero_grad()
-        actor_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.actor_net.parameters(), self.max_grad_norm)
-        self.actor_optimizer.step()
+        self._optimize(self.actor_optimizer, actor_loss, self.actor_net)
 
         log_dict["actor_loss"] = actor_loss.item()
         log_dict["actor_q"] = q_pi.mean().item()
@@ -225,7 +248,17 @@ class TD3AWR:
         log_dict["pre_activ_reg"] = pre_reg.item()
 
     # ------------------------------------------------------------------ #
-    def train(self, batch):
+    def train(self, batch) -> dict:
+        """One TD3-AWR step: critic, value and (delayed) actor updates.
+
+        Args:
+            batch: ``(state, next_state, actions, next_actions, rewards,
+                dones, mc_returns)`` as produced by ``Buffer.sample_td3`` /
+                ``Buffer.epoch_generator_td3``.
+
+        Returns:
+            Dict of scalar training statistics.
+        """
         self.n_updates += 1
         log_dict = {}
         state, next_state, actions, next_actions, rewards, dones, mc_returns = batch
@@ -254,15 +287,6 @@ class TD3AWR:
         return log_dict
 
     # ------------------------------------------------------------------ #
-    def update_target(self):
-        for target_param, param in zip(self.target_net.parameters(), self.q_net.parameters()):
-            target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
-
     def update_actor_target(self):
-        for target_param, param in zip(self.target_actor_net.parameters(), self.actor_net.parameters()):
-            target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
-
-    def get_dict(self):
-        return {
-            "actor_net": self.actor_net.state_dict(),
-        }
+        """Polyak-average the online actor into the target actor."""
+        soft_update(self.target_actor_net, self.actor_net, self.tau)

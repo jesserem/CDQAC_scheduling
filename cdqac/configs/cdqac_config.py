@@ -3,7 +3,7 @@
 Defaults correspond to the hyperparameters reported in Table 11 of the paper.
 Every field can be overridden on the command line via pyrallis, e.g.:
 
-    python train_cdqac.py --train_instance SD1_train_15_10_500.npy --seed 2
+    python train_cdqac.py --train_instance train_15_10.npy --seed 2
 """
 from typing import List, Optional
 from dataclasses import dataclass
@@ -16,9 +16,9 @@ class TrainConfig:
     seed: int = 1
 
     # --- Data -----------------------------------------------------------------
-    data_path: str = "./dataset"
-    train_instance: str = "SD1_train_10_5_1000.npy"
-    eval_instance: str = "SD1_10_5_val.npy"
+    data_path: str = "./train_dataset/fjsp"
+    train_instance: str = "train_10_5.npy"
+    eval_instance: str = "val_10_5.npy"
     num_instances: Optional[int] = 500  # subset of training instances to use
     normalize: bool = False             # normalize state features with buffer statistics
     remove_duplicate: bool = True       # drop duplicate trajectories per instance
@@ -93,6 +93,20 @@ class TrainConfig:
     anneal_entropy: bool = False
     anneal_lr: bool = False
     backup_entropy: bool = False
+
+    # --- Disk-backed buffer / DataLoader (low-RAM dataset pipeline) -----------
+    use_disk_buffer: bool = False    # store transitions in memmaps on disk instead of RAM
+    buffer_dir: Optional[str] = None  # memmap location; default: $SLURM_TMPDIR (node-local
+    #                                   scratch) when running under SLURM, else
+    #                                   <save_folder>/buffer_cache. For buffers larger than
+    #                                   RAM this MUST be a local disk, not NFS/Lustre.
+    cleanup_buffer_files: bool = True  # delete the memmap files when training finishes
+    num_workers: int = 8             # DataLoader workers preparing batches in parallel
+    prefetch_factor: int = 4         # batches prefetched per worker
+    pin_memory: bool = True          # pinned host memory for async H2D copies
+    persistent_workers: bool = True  # keep workers alive across epochs
+    sampler_chunk_len: int = 1       # 1 = exact uniform sampling; >1 (e.g. 32) builds batches
+    #                                   from contiguous index runs -> sequential disk reads.
 
     # --- Evaluation / checkpointing -------------------------------------------
     eval_freq: int = 1000               # evaluate every n gradient steps
