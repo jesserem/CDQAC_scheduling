@@ -10,7 +10,7 @@ class TrainConfig:
 
 
     # Data collection
-    data_path: str = "./train_dataset/fjsp"
+    data_path: str = "./train_datasets/fjsp"
     train_instance: str = "train_10_5.npy"
     eval_instance: str = "val_10_5.npy"
 
