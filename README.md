@@ -184,3 +184,15 @@ checkpoint / dataset path as argument:
 - `notebooks/` — notebooks used to produce the tables and figures
 
 
+## BibTex
+
+```
+@article{remmerden2026generalizing,
+    title={Generalizing Beyond Suboptimality: Offline Reinforcement Learning Learns Effective Scheduling through Random Solutions},
+    author={Jesse van Remmerden and Zaharah Bukhsh and Yingqian Zhang},
+    journal={Transactions on Machine Learning Research},
+    issn={2835-8856},
+    year={2026},
+    url={https://openreview.net/forum?id=4vVhm4817Q}
+}
+```
