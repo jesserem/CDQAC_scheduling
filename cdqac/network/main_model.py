@@ -422,16 +422,16 @@ class QRDQNNet(nn.Module):
         )
         self.use_global_state = use_global_state
         self.use_adv_net = use_adv_net
-        if self.use_adv_net:
-            self.input_dim_candidate = (4 * self.embedding_output_dim + self.pair_input_dim)
-        else:
-            self.input_dim_candidate = (4 * self.embedding_output_dim + self.pair_input_dim)
-        self.input_dim_global = 1 * self.embedding_output_dim
+        # head input sizes must match the concatenations in get_embedding():
+        # candidate_feature = cat(fea_j_jc, fea_m, fea_j_global, fea_m_global, fea_pairs)
+        self.input_dim_candidate = 4 * self.embedding_output_dim + self.pair_input_dim
+        # global_feature = cat(fea_j_global, fea_m_global)
+        self.input_dim_global = 2 * self.embedding_output_dim
         if self.use_adv_net:
             self.Q = [QRDQN_advantage_single(
                             num_mlp_layers_critic,
                             self.input_dim_candidate,
-                            self.input_dim_global + self.pair_input_dim,
+                            self.input_dim_global,
                             hidden_dim_critic,
                             num_quantiles,
                             dropout=dropout_prob_q,
