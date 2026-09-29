@@ -30,3 +30,8 @@ GA_data/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Real-world datasets (prepare_realworld.py)
+realworld_data/
+raw/
+raw_fixtures/

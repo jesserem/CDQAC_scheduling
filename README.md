@@ -184,6 +184,25 @@ checkpoint / dataset path as argument:
 - `notebooks/` — notebooks used to produce the tables and figures
 
 
+## Real-world datasets (extension)
+
+`realworld/` extends the library to offline RL on real-world routing logs:
+the 2021 Amazon Last Mile Routing Challenge (real driver routes, deterministic
+MDP) and LaDe-D / LaDe-P (Cainiao courier logs, per-courier SMDP with
+exogenous arrivals). Datasets are converted into a standard episode format,
+optionally augmented with synthetic behaviour, and every method above trains on
+them unchanged through `train_realworld.py`:
+
+```bash
+python prepare_realworld.py download --dataset amazon_lmrrc
+python prepare_realworld.py convert  --dataset amazon_lmrrc
+python train_realworld.py --method cdqac --dataset amazon_lmrrc
+python eval_realworld.py checkpoints/amazon_lmrrc/<run> logged nn --split test
+```
+
+See [`realworld/README.md`](realworld/README.md) for the decision-process
+design per dataset, the data format, evaluation metrics and how to add datasets.
+
 ## BibTex
 
 ```

@@ -134,20 +134,50 @@ def make_value_net(config) -> IQL_value:
     ).to(config.device)
 
 
+def make_mqrdqn(config) -> mQRDQNNet:
+    return mQRDQNNet(
+        fea_j_input_dim=config.fea_j_input_dim,
+        fea_m_input_dim=config.fea_m_input_dim,
+        layer_fea_output_dim=config.layer_fea_output_dim,
+        num_heads_OAB=config.num_heads_OAB,
+        num_heads_MAB=config.num_heads_MAB,
+        num_mlp_layers_critic=config.num_mlp_layers_actor,
+        num_quantiles=config.num_quantiles,
+        hidden_dim_critic=config.hidden_dim_actor,
+        use_adv_net=config.use_adv_net,
+        dropout_prob_q=config.dropout_prob_q,
+        layer_norm=config.layer_norm,
+    ).to(config.device)
+
+
+class FJSPNets:
+    """Network factory used by the ``build_*`` functions below.
+
+    The default builds the DAN-based JSP/FJSP networks of the paper.  Other
+    problem families pass their own factory with the same four static methods
+    (e.g. ``realworld.nets.RoutingNets`` for the real-world routing datasets),
+    so every method builder is shared across problem families.
+    """
+    actor = staticmethod(make_actor)
+    qrdqn = staticmethod(make_qrdqn)
+    value = staticmethod(make_value_net)
+    mqrdqn = staticmethod(make_mqrdqn)
+
+
 # ---------------------------------------------------------------------------
 # Per-method trainer builders. Each returns (trainer, eval_net).
 # ---------------------------------------------------------------------------
 
-def build_cdqac(config):
-    actor_net = make_actor(config)
-    target_actor_net = make_actor(config)
+def build_cdqac(config, nets=FJSPNets):
+    actor_net = nets.actor(config)
+    target_actor_net = nets.actor(config)
     target_actor_net.load_state_dict(actor_net.state_dict())
 
     if not config.use_qrdqn:
         config.num_quantiles = 1
 
-    q_net = make_qrdqn(config, config.num_quantiles, config.use_adv_net)
-    target_net = make_qrdqn(config, config.num_quantiles, config.use_adv_net)
+    q_net = nets.qrdqn(config, config.num_quantiles, config.use_adv_net)
+    target_net = nets.qrdqn(config, config.num_quantiles, config.use_adv_net)
     target_net.load_state_dict(q_net.state_dict())
     target_net.eval()
 
@@ -188,18 +218,18 @@ def build_cdqac(config):
     return trainer, actor_net
 
 
-def build_td3_awr(config):
-    actor_net = make_actor(config)
-    target_actor_net = make_actor(config)
+def build_td3_awr(config, nets=FJSPNets):
+    actor_net = nets.actor(config)
+    target_actor_net = nets.actor(config)
     target_actor_net.load_state_dict(actor_net.state_dict())
     target_actor_net.eval()
 
-    q_net = make_qrdqn(config, num_quantiles=1, use_adv_net=False)
-    target_net = make_qrdqn(config, num_quantiles=1, use_adv_net=False)
+    q_net = nets.qrdqn(config, num_quantiles=1, use_adv_net=False)
+    target_net = nets.qrdqn(config, num_quantiles=1, use_adv_net=False)
     target_net.load_state_dict(q_net.state_dict())
     target_net.eval()
 
-    value_net = make_value_net(config)
+    value_net = nets.value(config)
 
     actor_optimizer = torch.optim.Adam(actor_net.parameters(), lr=config.p_lr)
     q_optimizer = torch.optim.Adam(q_net.parameters(), lr=config.q_lr)
@@ -237,15 +267,15 @@ def build_td3_awr(config):
     return trainer, actor_net
 
 
-def build_iql(config):
-    actor_net = make_actor(config)
+def build_iql(config, nets=FJSPNets):
+    actor_net = nets.actor(config)
 
-    q_net = make_qrdqn(config, num_quantiles=1, use_adv_net=False)
-    target_net = make_qrdqn(config, num_quantiles=1, use_adv_net=False)
+    q_net = nets.qrdqn(config, num_quantiles=1, use_adv_net=False)
+    target_net = nets.qrdqn(config, num_quantiles=1, use_adv_net=False)
     target_net.load_state_dict(q_net.state_dict())
     target_net.eval()
 
-    value_net = make_value_net(config)
+    value_net = nets.value(config)
 
     actor_optimizer = torch.optim.Adam(actor_net.parameters(), lr=config.p_lr)
     q_optimizer = torch.optim.Adam(q_net.parameters(), lr=config.q_lr)
@@ -270,16 +300,16 @@ def build_iql(config):
     return trainer, actor_net
 
 
-def build_dmsac(config):
-    actor_net = make_actor(config)
-    target_actor_net = make_actor(config)
+def build_dmsac(config, nets=FJSPNets):
+    actor_net = nets.actor(config)
+    target_actor_net = nets.actor(config)
     target_actor_net.load_state_dict(actor_net.state_dict())
 
     if not config.use_qrdqn:
         config.num_quantiles = 1
 
-    q_net = make_qrdqn(config, config.num_quantiles, config.use_adv_net)
-    target_net = make_qrdqn(config, config.num_quantiles, config.use_adv_net)
+    q_net = nets.qrdqn(config, config.num_quantiles, config.use_adv_net)
+    target_net = nets.qrdqn(config, config.num_quantiles, config.use_adv_net)
     target_net.load_state_dict(q_net.state_dict())
     target_net.eval()
 
@@ -318,37 +348,12 @@ def build_dmsac(config):
     return trainer, actor_net
 
 
-def build_mqrdqn(config):
+def build_mqrdqn(config, nets=FJSPNets):
     if not config.use_qrdqn:
         config.num_quantiles = 1
 
-    q_net = mQRDQNNet(
-        fea_j_input_dim=config.fea_j_input_dim,
-        fea_m_input_dim=config.fea_m_input_dim,
-        layer_fea_output_dim=config.layer_fea_output_dim,
-        num_heads_OAB=config.num_heads_OAB,
-        num_heads_MAB=config.num_heads_MAB,
-        num_mlp_layers_critic=config.num_mlp_layers_actor,
-        num_quantiles=config.num_quantiles,
-        hidden_dim_critic=config.hidden_dim_actor,
-        use_adv_net=config.use_adv_net,
-        dropout_prob_q=config.dropout_prob_q,
-        layer_norm=config.layer_norm,
-    ).to(config.device)
-
-    target_net = mQRDQNNet(
-        fea_j_input_dim=config.fea_j_input_dim,
-        fea_m_input_dim=config.fea_m_input_dim,
-        layer_fea_output_dim=config.layer_fea_output_dim,
-        num_heads_OAB=config.num_heads_OAB,
-        num_heads_MAB=config.num_heads_MAB,
-        num_mlp_layers_critic=config.num_mlp_layers_actor,
-        num_quantiles=config.num_quantiles,
-        hidden_dim_critic=config.hidden_dim_actor,
-        use_adv_net=config.use_adv_net,
-        dropout_prob_q=config.dropout_prob_q,
-        layer_norm=config.layer_norm,
-    ).to(config.device)
+    q_net = nets.mqrdqn(config)
+    target_net = nets.mqrdqn(config)
     target_net.load_state_dict(q_net.state_dict())
     target_net.eval()
 
@@ -376,8 +381,8 @@ def build_mqrdqn(config):
     return trainer, q_net
 
 
-def build_bc(config):
-    actor_net = make_actor(config)
+def build_bc(config, nets=FJSPNets):
+    actor_net = nets.actor(config)
     actor_optimizer = torch.optim.Adam(actor_net.parameters(), lr=config.p_lr)
     trainer = Imitation_Learning(
         actor_net=actor_net,

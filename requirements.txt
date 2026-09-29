@@ -18,3 +18,7 @@ huggingface_hub
 
 # For a CUDA build of torch, install instead e.g.:
 #   pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu126
+
+# Optional: real-world datasets (realworld/, prepare_realworld.py)
+pyarrow   # LaDe is distributed as parquet
+ijson     # streams the multi-GB Amazon travel-time JSON instead of loading it into RAM
