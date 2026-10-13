@@ -66,6 +66,7 @@ import numpy as np
 import torch
 
 from cdqac.network.main_model import QRDQNNet
+from cdqac.data import load_instance_dicts
 from env.fjsp_env_same_op_nums import FJSPEnvForSameOpNums
 
 
@@ -74,10 +75,10 @@ from env.fjsp_env_same_op_nums import FJSPEnvForSameOpNums
 # ---------------------------------------------------------------------------
 
 USED_PDR = [
-    "MWR_SPT_masked", "MWR_LPT_masked", "LWR_SPT_masked", "LWR_LPT_masked",
-    "MWR_EST_masked", "MWR_LST_masked", "LWR_EST_masked", "LWR_LST_masked",
-    "MOPNR_SPT_masked", "MOPNR_LPT_masked", "LOPNR_SPT_masked", "LOPNR_LPT_masked",
-    "MOPNR_EST_masked", "MOPNR_LST_masked", "LOPNR_EST_masked", "LOPNR_LST_masked",
+    "MWR_SPT", "MWR_LPT", "LWR_SPT", "LWR_LPT",
+    "MWR_EST", "MWR_LST", "LWR_EST", "LWR_LST",
+    "MOPNR_SPT", "MOPNR_LPT", "LOPNR_SPT", "LOPNR_LPT",
+    "MOPNR_EST", "MOPNR_LST", "LOPNR_EST", "LOPNR_LST",
 ]
 
 # QRDQNNet architecture stored in latest_check.pt (verified by strict load; matches the
@@ -405,7 +406,7 @@ def build_argparser():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--checkpoint",
                    default="Quantile_critic/Check-fe9af749_seed_1/latest_check.pt")
-    p.add_argument("--data", default="dataset/SD1_train_10_5_1000.npy",
+    p.add_argument("--data", default="fjsp/sd1_10x5",
                    help="Training dataset .npy (states reached by replaying its trajectories)")
     p.add_argument("--n_instances", type=int, default=500)
     p.add_argument("--n_ga", type=int, default=200, help="GA-pop trajectories per instance")
@@ -443,7 +444,7 @@ def main():
     print(f"Loaded QRDQNNet (d={model.embedding_output_dim}, "
           f"num_quantiles={model.num_quantiles}, n_critics={len(model.Q)})")
 
-    data = np.load(args.data, allow_pickle=True)
+    data = load_instance_dicts(args.data)
     best = select_states(
         model, normalizer, data, device,
         n_instances=args.n_instances, n_ga=args.n_ga, n_random=args.n_random,

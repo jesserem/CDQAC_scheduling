@@ -112,4 +112,5 @@ parser.add_argument('--sample_times', type=int, default=100, help='Sampling time
 parser.add_argument('--test_model', nargs='+', default=['10x5+mix'], help='List of model for testing')
 parser.add_argument('--test_method', nargs='+', default=["FIFO",], help='List of heuristic methods for testing')
 
-configs = parser.parse_args()
+# parse_known_args: env.data_utils imports this module, and scripts importing it have their own flags
+configs, _ = parser.parse_known_args()

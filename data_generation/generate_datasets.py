@@ -1,285 +1,186 @@
-import json
+"""Generate an offline dataset from scratch, in the dataset-directory format.
 
-from env.common_utils import *
-from env.data_utils import SD2_instance_generator_no_config, CaseGenerator
-from env.params import configs
-from env.fjsp_env_same_op_nums import FJSPEnvForSameOpNums
-from env.fjsp_env_various_op_nums import FJSPEnvForVariousOpNums
-from tqdm import tqdm
-from env.data_utils import pack_data_from_config
-import time
-import numpy as np
-import torch
-from collections import defaultdict
-import sys
-import os
-#
-# os.environ["CUDA_VISIBLE_DEVICES"] = configs.device_id
+    # instances + PDR + random + eps-PDR, like the released fjsp/sd1_10x5 (GA: see below)
+    python -m data_generation.generate_datasets --dataset fjsp/sd1_10x5 --generator sd1 \
+        --n_j 10 --n_m 5 --num_train 1000 --seed 101 \
+        --sources pdr random:300 eps_pdr:0.1:100:500 eps_pdr:0.2:100:500
+
+    # JSP, like the released jsp/taillard_10x5
+    python -m data_generation.generate_datasets --dataset jsp/taillard_10x5 \
+        --generator taillard --n_j 10 --n_m 5 --num_train 500 --seed 101 --sources pdr random:300
+
+Instance generators (--generator):
+    sd1       FJSP, processing times 1-20, 0.8-1.2 n_m operations per job (CaseGenerator);
+              all train instances share one job-length vector, val instances draw their own
+    sd2       FJSP, n_m operations per job, processing times 1-99, 1-5 machines per operation
+    taillard  JSP, one machine per operation, processing times 1-98 (create_jsp_instance)
+
+Train instance i is drawn after reseeding with seed + i, val instance i with val_seed + i
+(default val_seed = seed + 1000). --seed 101 reproduces the training instances of the
+released fjsp/sd1_* and jsp/taillard_* datasets, and the JSP validation instances. (The
+released FJSP validation instances come from songwenas12/fjsp-drl.)
+
+Trajectory sources (--sources), each from its own --source_seed stream:
+    pdr                  dispatching rules of env/dispatching.py (16 for FJSP; for JSP, where
+                         every operation has one machine, the 4 job rules with SPT)
+    random:K             K uniformly random trajectories per instance
+    eps_pdr:EPS:K[:N]    K epsilon-PDR trajectories per instance, for the first N instances
+More sources can be added later with add_random_trajectories / add_eps_pdr_rules. GA
+trajectories come from an external GA: run data_generation/run_GA_custom.py on the dataset
+directory, then add them with data_generation/add_ga_data.py.
+"""
+import argparse
+import random
+
+import tqdm
+
+from cdqac.data.dataset import OfflineDataset
+from cdqac.data.writer import add_source, create_dataset
+from data_generation.add_eps_pdr_rules import eps_source, source_info as eps_info
+from data_generation.add_random_trajectories import SOURCE_INFO as RANDOM_INFO, random_source
+from env.common_utils import setup_seed
+from env.data_utils import CaseGenerator, SD2_instance_generator_no_config, create_jsp_instance
+from env.dispatching import PDR_JOB_RULES, PDR_MACHINE_RULES, pdr_rule_name, run_dispatching
 
 
-# def collect_heuristic_method(data_set, heuristic, seed):
-#     """
-#         test one heuristic method on the given data
-#     :param data_set:  test data
-#     :param heuristic: the name of heuristic method
-#     :param seed: seed for testing
-#     :return: the test results including the makespan and time
-#     """
-#     setup_seed(seed)
-#     result = []
-#     action_list = []
-#
-#     for i in tqdm(range(len(data_set[0])), file=sys.stdout, desc="progress", colour='blue'):
-#         n_j = data_set[0][i].shape[0]
-#         n_op, n_m = data_set[1][i].shape
-#         env = FJSPEnvForSameOpNums(n_j=n_j, n_m=n_m)
-#
-#         env.set_initial_data([data_set[0][i]], [data_set[1][i]])
-#
-#         t1 = time.time()
-#         while True:
-#             action = heuristic_select_action(heuristic, env)
-#             # print(action)
-#             # exit()
-#
-#             state, _, done = env.step(np.array([action]))
-#             # print(state)
-#
-#             if done:
-#                 break
-#
-#         t2 = time.time()
-#         # tqdm.write(f'Instance {i + 1} , makespan:{-ep_reward} , time:{t2 - t1}')
-#         result.append([env.current_makespan[0], t2 - t1])
-#
-#     return np.array(result)
-
-def collect_heuristic_method(job_lenght, opt, heuristic, seed, use_sd1=False, noisy_prob=0.1):
-    """
-        test one heuristic method on the given data
-    :param data_set:  test data
-    :param heuristic: the name of heuristic method
-    :param seed: seed for testing
-    :return: the test results including the makespan and time
-    """
+def sd1_instances(n_j, n_m, num, seed, same_job_length):
+    lo, hi = int(0.8 * n_m), int(1.2 * n_m)
     setup_seed(seed)
-    result = []
-    action_list = []
-
-
-    n_j = job_lenght.shape[0]
-    n_op, n_m = opt.shape
-    if use_sd1:
-        env = FJSPEnvForVariousOpNums(n_j=n_j, n_m=n_m)
-
-    else:
-        env = FJSPEnvForSameOpNums(n_j=n_j, n_m=n_m)
-    # print(job_lenght)
-    # print(opt)
-    # exit()
-
-    state = env.set_initial_data([job_lenght], [opt])
-
-    # print(state.fea_pair_tensor.shape)
-    reward_list = []
-
-
-
-    while True:
-        if np.random.rand() < noisy_prob:
-            avail_actions = (~state.dynamic_pair_mask_tensor[0].flatten()).to(torch.float32)
-            action = torch.multinomial(avail_actions, 1).item()
-        else:
-            action = heuristic_select_action(heuristic, env, deterministic=True)
-        action_list.append(int(action))
-        # print(action)
-        job = action // env.number_of_machines
-        machine = action % env.number_of_machines
-        # print(action)
-        # print(state.dynamic_pair_mask_tensor[0].flatten())
-
-        invalid_action = state.dynamic_pair_mask_tensor[0][job][machine]
-        if invalid_action:
-            print(f"Invalid action: job {job}, machine {machine} violates dynamic_pair_mask")
-            print(state.dynamic_pair_mask_tensor[0])
-            print(action)
-            exit()
-        # print(action)
-            # exit()
-
-        state, reward, done = env.step(np.array([action]))
-        reward_list.append(reward[0])
-        # print(state)
-        # print()
-            # print(state)
-
-        if done:
-            break
-
-    # print(env.current_makespan)
-    # print(reward_list)
-    # exit()
-    return action_list, env.current_makespan[0], reward_list
-
-
-def create_dataset(n_j, n_m, type, num_runs=250, seed=9999):
-    """
-        test heuristic methods following the config and save the results:
-        here are heuristic methods selected for comparison:
-
-        FIFO: First in first out
-        MOR(or MOPNR): Most operations remaining
-        SPT: Shortest processing time
-        MWKR: Most work remaining
-    """
-    if type == 'SD1':
-        use_sd1 = True
-    elif type == 'SD2':
-        use_sd1 = False
-    else:
-        raise ValueError("Invalid type")
-
-    op_per_job = 0
-    low = 1
-    high = 99
-    op_per_job_min = int(0.8 * n_m)
-    op_per_job_max = int(1.2 * n_m)
-    op_per_machine_min = 1
-    op_per_machine_max = 5
-
-    noisy_prob = 0
-    method = ['SPT_DIV_TWK', 'SPT_DIV_TWKR', 'FIFO', 'MOR', 'SPT', 'MWKR', "LOR", "LWKR", "LPT"]
-    # method = ['SPT_DIV_TWKR', 'FIFO', 'MOR', 'SPT', 'MWKR', "LOR", "LWKR", "LPT"]
-    # exit()d
-
-    name_dataset = f'{type}_train_{n_j}_{n_m}_{num_runs}.npy'
-
-
-    setup_seed(seed)
-    data_list = []
-    makespan_rules = defaultdict(list)
-    if not os.path.exists('dataset_backup'):
-        os.makedirs('dataset_backup')
-    prepare_JobLength = [random.randint(op_per_job_min, op_per_job_max) for _ in range(n_j)]
-
-    for i in range(num_runs):
-        curr_instance = {}
+    prepare_job_length = [random.randint(lo, hi) for _ in range(n_j)]
+    job_lengths, op_pts = [], []
+    for i in range(num):
         setup_seed(seed + i)
+        case = CaseGenerator(n_j, n_m, lo, hi, nums_ope=prepare_job_length, path="./test",
+                             flag_same_opes=same_job_length, flag_doc=False)
+        job_length, op_pt, _ = case.get_case(i)
+        job_lengths.append(job_length)
+        op_pts.append(op_pt)
+    return job_lengths, op_pts
 
 
-        if use_sd1:
-            case = CaseGenerator(n_j, n_m, op_per_job_min, op_per_job_max, nums_ope=prepare_JobLength, path='./test',
-                                 flag_doc=False)
-            JobLength, OpPT, info = case.get_case(i)
+def sd2_instances(n_j, n_m, num, seed):
+    job_lengths, op_pts = [], []
+    for i in range(num):
+        setup_seed(seed + i)
+        job_length, op_pt, _ = SD2_instance_generator_no_config(
+            n_j=n_j, n_m=n_m, op_per_job=0, low=1, high=99, op_per_mch_min=1,
+            op_per_mch_max=min(5, n_m))
+        job_lengths.append(job_length)
+        op_pts.append(op_pt)
+    return job_lengths, op_pts
 
+
+def taillard_instances(n_j, n_m, num, seed):
+    job_lengths, op_pts = [], []
+    for i in range(num):
+        setup_seed(seed + i)
+        job_length, op_pt = create_jsp_instance(n_j, n_m, 1, 99)
+        job_lengths.append(job_length)
+        op_pts.append(op_pt)
+    return job_lengths, op_pts
+
+
+GENERATOR_INFO = {
+    "sd1": {"name": "SD1", "code": "env.data_utils.CaseGenerator",
+            "params": {"processing_times": [1, 20], "ops_per_job": "0.8-1.2 n_m"},
+            "notes": "all train instances share one job_length vector; val instances draw "
+                     "their own"},
+    "sd2": {"name": "SD2", "code": "env.data_utils.SD2_instance_generator_no_config",
+            "params": {"processing_times": [1, 99], "ops_per_job": "n_m",
+                       "machines_per_op": "1-min(5, n_m)"}},
+    "taillard": {"name": "taillard", "code": "env.data_utils.create_jsp_instance",
+                 "params": {"processing_times": [1, 98]},
+                 "notes": "every operation has exactly one machine"},
+}
+
+
+def make_instances(generator, n_j, n_m, num, seed, split):
+    if generator == "sd1":
+        return sd1_instances(n_j, n_m, num, seed, same_job_length=(split == "train"))
+    if generator == "sd2":
+        return sd2_instances(n_j, n_m, num, seed)
+    if generator == "taillard":
+        return taillard_instances(n_j, n_m, num, seed)
+    raise ValueError(f"unknown generator {generator}")
+
+
+def pdr_source(split, machine_rules):
+    rules = [(j, m) for j in PDR_JOB_RULES for m in PDR_MACHINE_RULES if m in machine_rules]
+    actions, makespans = [], []
+    op_pts = split.op_pts()
+    for i in tqdm.trange(len(split), desc="dispatching rules"):
+        runs = [run_dispatching(split.job_length[i], op_pts[i], j, m) for j, m in rules]
+        actions.append([a for a, _ in runs])
+        makespans.append([m for _, m in runs])
+    return actions, makespans, [pdr_rule_name(j, m) for j, m in rules]
+
+
+def parse_source(spec: str):
+    """'pdr' | 'random:K' | 'eps_pdr:EPS:K[:N]' -> (kind, params)."""
+    parts = spec.split(":")
+    if parts[0] == "pdr" and len(parts) == 1:
+        return "pdr", {}
+    if parts[0] == "random" and len(parts) == 2:
+        return "random", {"num_random": int(parts[1])}
+    if parts[0] == "eps_pdr" and len(parts) in (3, 4):
+        return "eps_pdr", {"eps": parts[1], "num_runs": int(parts[2]),
+                           "num_instances": int(parts[3]) if len(parts) == 4 else None}
+    raise ValueError(f"cannot parse source '{spec}' (expected pdr, random:K or eps_pdr:EPS:K[:N])")
+
+
+def generate(dataset_id, generator, n_j, n_m, num_train, num_val, seed, val_seed, sources,
+             source_seed=100, data_root="./train_datasets", overwrite=False):
+    specs = [parse_source(s) for s in sources]
+    train = make_instances(generator, n_j, n_m, num_train, seed, "train")
+    val = make_instances(generator, n_j, n_m, num_val, val_seed, "val") if num_val else None
+    info = dict(GENERATOR_INFO[generator], seed=seed, val_seed=val_seed if num_val else None)
+    path = create_dataset(data_root, dataset_id, train, val=val, generator=info,
+                          description=f"{generator} {n_j}x{n_m} offline dataset "
+                                      f"(data_generation/generate_datasets.py)",
+                          overwrite=overwrite)
+    split = OfflineDataset.from_dir(path).split("train")
+    for kind, params in specs:
+        if kind == "pdr":
+            machine_rules = ["SPT"] if generator == "taillard" else list(PDR_MACHINE_RULES)
+            actions, makespans, names = pdr_source(split, machine_rules)
+            add_source(path, "pdr", actions, makespans, names=names,
+                       info={"description": "priority dispatching rules, job rule x machine "
+                                            "rule, action mask on; slot k is rule names[k]",
+                             "order": "rule"})
+        elif kind == "random":
+            actions, makespans = random_source(split, params["num_random"], source_seed)
+            add_source(path, "random", actions, makespans,
+                       info=dict(RANDOM_INFO, seed=source_seed))
         else:
-            JobLength, OpPT, info = SD2_instance_generator_no_config(n_j=n_j, n_m=n_m, op_per_job=op_per_job, low=low,
-                                                                  high=high,
-                                                                  op_per_mch_min=op_per_machine_min,
-                                                                  op_per_mch_max=op_per_machine_max)
-        curr_instance['JobLength'] = JobLength.tolist()
-
-        curr_instance['OpPT'] = OpPT.tolist()
-        curr_instance["rules"] = {}
-        # curr_instance["info"] = info.tolist()
-        data_list.append(curr_instance)
-
-    # JobLength, OpPT, _ = SD2_instance_generator_no_config(n_j=n_j, n_m=n_m, op_per_job=op_per_job, low=low, high=high,
-    #                                         op_per_mch_min=op_per_machine_min, op_per_mch_max=op_per_machine_max)
-
-
-
-    # exit()
-
-
-    for i in range(num_runs):
-        print(f"Generating {i + 1}th instance")
-        jobLength = np.array(data_list[i]['JobLength'])
-        OpPT = np.array(data_list[i]['OpPT'])
-        # print(jobLength)
-        # exit()
-        current_reward_list = []
-        for m in method:
-            print("Testing method: ", m)
-            result, makespan, reward_list = collect_heuristic_method(jobLength, OpPT, m, i, use_sd1=use_sd1, noisy_prob=noisy_prob)
-            data_list[i]["rules"][m] = result
-            makespan_rules[m].append(makespan)
-            current_reward_list += reward_list
-        current_reward_list = np.array(current_reward_list)
-        mean_reward = np.mean(current_reward_list)
-        std_reward = np.std(current_reward_list)
-        data_list[i]["mean_reward"] = mean_reward
-        data_list[i]["std_reward"] = std_reward
-        # print(f"Mean reward: {mean_reward}, std reward: {std_reward}")
-        # exit()
-
-        # print(curr_instance)
-
-
-    np.save(f'dataset_backup/{name_dataset}', data_list)
-    for m in method:
-        print(f"Method: {m}, makespan: {np.mean(makespan_rules[m])}")
-    # print(data_list[0], data_list[1])
-
-
-
-
-    # for data in test_data:
-    #     for i in range(len(data[0])):
-    #         job_length_list = data[0][i]
-    #         op_pt_list = data[1][i]
-
-            # exit()
-        # print(data)
-        # exit()
-        # print("-" * 25 + "Test Heuristic Methods" + "-" * 25)
-        # print('Test Methods:', test_method)
-        # print(f"test data name: {configs.data_source},{data[1]}")
-        # save_direc = f'./test_results/{configs.data_source}/{data[1]}'
-        #
-        # if not os.path.exists(save_direc):
-        #     os.makedirs(save_direc)
-        # for method in test_method:
-        #     save_path = save_direc + f'/Result_{method}_{data[1]}.npy'
-        #
-        #     if (not os.path.exists(save_path)) or configs.cover_heu_flag:
-        #         print(f"Heuristic method : {method}")
-        #         seed = configs.seed_test
-        #
-        #         result_5_times = []
-        #         # test 5 times, record average makespan and time.
-        #         for j in range(5):
-        #             result = collect_heuristic_method(data[0], method, seed + j)
-        #             result_5_times.append(result)
-        #
-        #             print(f"the {j + 1}th makespan:", np.mean(result[:, 0]))
-        #         result_5_times = np.array(result_5_times)
-        #         save_result = np.mean(result_5_times, axis=0)
-        #         print(f"testing results of {method}:")
-        #         print(f"makespan(sampling): ", save_result[:, 0].mean())
-        #         print(f"time: ", save_result[:, 1].mean())
-        #         np.save(save_path, save_result)
+            actions, makespans = eps_source(split, float(params["eps"]), params["num_runs"],
+                                            source_seed, params["num_instances"])
+            add_source(path, f"eps_pdr_{params['eps']}", actions, makespans,
+                       info=dict(eps_info(params["eps"]), seed=source_seed))
+    return path
 
 
 def main():
-    setup_list = [
-        (10, 5, "SD2"),
-        (10, 5, "SD1"),
-        (15, 10, "SD1"),
-        (20, 5, "SD1"),
-        (20, 10, "SD1"),
-        # (10, 5, "SD2"),
-        (15, 10, "SD2"),
-        (20, 5, "SD2"),
-        (20, 10, "SD2"),
-    ]
-    seed=9999
-    num_runs_list = [100, 250, 500, 1000]
-    for num_runs in num_runs_list:
-        for setup in setup_list:
-            n_j, n_m, type = setup
-            print(f"Generating dataset for {n_j} jobs, {n_m} machines, {type} type, {num_runs} runs")
-            create_dataset(n_j, n_m, type, num_runs=num_runs, seed=seed)
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--dataset", required=True, help="id of the new dataset, e.g. fjsp/sd1_10x5")
+    p.add_argument("--generator", required=True, choices=sorted(GENERATOR_INFO))
+    p.add_argument("--n_j", type=int, required=True)
+    p.add_argument("--n_m", type=int, required=True)
+    p.add_argument("--num_train", type=int, default=1000)
+    p.add_argument("--num_val", type=int, default=100)
+    p.add_argument("--seed", type=int, default=101)
+    p.add_argument("--val_seed", type=int, default=None, help="default: seed + 1000")
+    p.add_argument("--sources", nargs="*", default=["pdr", "random:300"])
+    p.add_argument("--source_seed", type=int, default=100)
+    p.add_argument("--data_root", default="./train_datasets")
+    p.add_argument("--overwrite", action="store_true")
+    args = p.parse_args()
+    val_seed = args.seed + 1000 if args.val_seed is None else args.val_seed
+    path = generate(args.dataset, args.generator, args.n_j, args.n_m, args.num_train,
+                    args.num_val, args.seed, val_seed, args.sources, args.source_seed,
+                    args.data_root, args.overwrite)
+    print(f"Wrote {path}; check it with: python -m cdqac.data validate {args.dataset}")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

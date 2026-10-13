@@ -64,6 +64,7 @@ import os
 import numpy as np
 import torch
 
+from cdqac.data import load_instance_dicts
 from env.fjsp_env_same_op_nums import FJSPEnvForSameOpNums
 from quantile_distribution_experiment import (
     _density,
@@ -325,7 +326,7 @@ def build_argparser():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--checkpoint",
                    default="Quantile_critic/Check-fe9af749_seed_1/latest_check.pt")
-    p.add_argument("--data", default="dataset/SD1_train_10_5_1000.npy")
+    p.add_argument("--data", default="fjsp/sd1_10x5")
     # --- state selection: keep these identical to quantile_distribution_experiment.py
     #     so the SAME state / archetypes are picked and the two figures line up ---
     p.add_argument("--n_instances", type=int, default=500)
@@ -364,7 +365,7 @@ def main():
     print(f"Device: {device} | checkpoint: {args.checkpoint} | alpha={args.cql_alpha}")
 
     model, normalizer = load_critic(args.checkpoint, device)
-    data = np.load(args.data, allow_pickle=True)
+    data = load_instance_dicts(args.data)
 
     # 1. the same archetype state as quantile_distribution_experiment.py
     best = select_states(

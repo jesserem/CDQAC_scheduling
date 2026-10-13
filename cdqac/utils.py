@@ -343,6 +343,7 @@ def collect_data_new(buffer, job_lenght_list, opt_list, action_list_list, FJSP_e
     v2_list = []
     comb_list = zip(job_lenght_list, opt_list, action_list_list)
     for i in tqdm.tqdm(range(len(action_list_list))):
+        instance_idx = i
         job_lenght, opt, action_list = next(comb_list)
 
         num_runs = len(action_list)
@@ -373,6 +374,11 @@ def collect_data_new(buffer, job_lenght_list, opt_list, action_list_list, FJSP_e
             # print(action.shape)
             # exit()
             cutt_off = np.random.rand() < cutt_off_episode_prob
+            forbidden = state.dynamic_pair_mask_tensor.flatten(1).cpu().numpy()[np.arange(num_runs), action]
+            if forbidden.any():
+                raise ValueError(f"training instance {instance_idx}: trajectory {int(np.argmax(forbidden))} "
+                                 f"takes action {int(action[np.argmax(forbidden)])} at step {i}, which "
+                                 f"the action mask forbids")
             next_state, reward, done = env.step(action)
             reward = (reward * reward_scale) + reward_bias
             # reward *= 100
