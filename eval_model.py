@@ -80,7 +80,6 @@ def infer_config_from_state_dict(state_dict):
         "num_heads_OAB": list(num_heads_OAB),
         "num_heads_MAB": list(num_heads_MAB),
         "dropout_prob_actor": 0,
-        "use_mask": True,
     }
 
     if any(key.startswith("actor.") for key in state_dict):
@@ -173,7 +172,7 @@ def resolve_save_path(save_path, weights_file, run_folder, eval_folder, num_samp
     return out_file
 
 
-def evaluate(net, names, job_lengths, op_pts, device, use_mask, num_samples, norm):
+def evaluate(net, names, job_lengths, op_pts, device, num_samples, norm):
     net.eval()
     results = {"name": [], "makespan": [], "runtime": []}
     deterministic = num_samples == 1
@@ -183,7 +182,7 @@ def evaluate(net, names, job_lengths, op_pts, device, use_mask, num_samples, nor
         job_length_batch = np.tile(np.expand_dims(job_length, axis=0), (num_samples, 1))
         op_pt_batch = np.tile(np.expand_dims(op_pt, axis=0), (num_samples, 1, 1))
 
-        env = FJSPEnvForVariousOpNums(n_j=n_j, n_m=n_m, device=device, mask_actions=use_mask)
+        env = FJSPEnvForVariousOpNums(n_j=n_j, n_m=n_m, device=device)
         state = env.set_initial_data(job_length_batch, op_pt_batch)
         makespan, runtime = do_run(state, env, net, num_samples, deterministic=deterministic, **norm)
 
@@ -231,8 +230,7 @@ def main():
     print(f"Evaluating {len(names)} instances from {args.eval_folder} "
           f"with num_samples={args.num_samples} on {args.device}")
 
-    res_df = evaluate(net, names, job_lengths, op_pts, args.device,
-                      model_config.get("use_mask", True), args.num_samples, norm)
+    res_df = evaluate(net, names, job_lengths, op_pts, args.device, args.num_samples, norm)
 
     out_file = resolve_save_path(args.save_path, weights_file, run_folder,
                                  args.eval_folder, args.num_samples)

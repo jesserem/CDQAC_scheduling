@@ -12,8 +12,6 @@ venv/
 # IDE/editor files
 .vscode/
 .idea/
-train_dataset*/
-data*/
 
 # Experiment outputs
 checkpoints*/
@@ -22,7 +20,11 @@ wandb/
 *.log
 slurm-*.out
 
-# Datasets (download from HuggingFace or regenerate, see README)
+# Datasets (download from HuggingFace or regenerate, see README). train_dataset*/ also
+# covers the legacy single-file copies: train_datasets/{fjsp,jsp}/*.npy,
+# train_datasets/legacy/ and scripts/train_datasets/
+train_dataset*/
+/data/
 dataset/
 jsp_dataset/
 GA_data/
@@ -30,3 +32,8 @@ GA_data/
 # OS files
 .DS_Store
 Thumbs.db
+
+/*_handoff/
+cdqac_handoff/
+
+HANDOFF_*

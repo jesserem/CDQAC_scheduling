@@ -96,7 +96,12 @@ class FJSPEnvForSameOpNums:
         """
         :param n_j: the number of jobs
         :param n_m: the number of machines
+        :param mask_actions: must be True: pairs that cannot start at the current decision
+            time are always masked (kept for compatibility with existing callers)
         """
+        if not mask_actions:
+            raise ValueError("the action mask is always applied (the datasets and models assume "
+                             "it); mask_actions=False is not supported")
         self.number_of_jobs = n_j
         self.number_of_machines = n_m
         self.old_state = EnvState()
@@ -426,7 +431,7 @@ class FJSPEnvForSameOpNums:
         self.dynamic_pair_mask = np.copy(self.candidate_process_relation)
 
         self.unavailable_pairs = self.pair_free_time > self.next_schedule_time[:, np.newaxis, np.newaxis]
-        #TODO ADD IF STATEMENT
+        # action mask: pairs that cannot start at the current decision time
         self.dynamic_pair_mask = np.logical_or(self.dynamic_pair_mask, self.unavailable_pairs)
 
         # update comp_idx

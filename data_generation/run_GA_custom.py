@@ -1,15 +1,17 @@
-"""Generate GA trajectories for a packed .npy instance dataset.
+"""Generate GA trajectories for the instances of a dataset.
 
 This script must be run from inside a clone of the Job Shop Scheduling
 Benchmark repository (Reijnen et al., 2023):
     https://github.com/ai-for-decision-making-tue/Job_Shop_Scheduling_Benchmark_Environments_and_Instances
 Copy this file into the root of that repository, then run e.g.:
 
-    python run_GA_custom.py --path <repo>/dataset/SD1_train_10_5_500.npy         --output_path <repo>/GA_data/10_5 --start_index 0 --end_index 500
+    python run_GA_custom.py --path <cdqac>/train_datasets/fjsp/sd1_10x5         --output_path <repo>/GA_data/sd1_10x5 --start_index 0 --end_index 500
 
-It writes one JSON file per instance ("<dataset>_GA_<idx>.json") containing
-the hall-of-fame and final-population action lists and makespans, which
-data_generation/add_ga_data.py merges back into the .npy dataset.
+``--path`` is a dataset directory (its train.npz is read; no cdqac import needed) or a
+legacy .npy file. It writes one JSON file per instance ("<name>_GA_<idx>.json", <name> being
+the dataset directory or file name) with the hall-of-fame and final-population action lists
+and makespans; data_generation/add_ga_data.py adds them to the dataset as the ga_hof and
+ga_pop sources.
 """
 from data_parsers.custom_instance_parser import parse
 from solution_methods.GA.src.initialization import initialize_run
@@ -22,9 +24,26 @@ import json
 
 
 def load_data(path):
+    """Instances as {"JobLength", "OpPT"} dicts, from a dataset directory or a legacy .npy."""
     print("Loading data from", path)
-    data = np.load(path, allow_pickle=True)
-    return data
+    if os.path.isdir(path):
+        path = os.path.join(path, "train.npz")
+    if path.endswith(".npz"):
+        with np.load(path) as f:
+            job_length, op_pt, n_ops = f["job_length"], f["op_pt"], f["n_ops"]
+        return [{"JobLength": job_length[i].astype(int), "OpPT": op_pt[i, :n_ops[i]].astype(int)}
+                for i in range(len(n_ops))]
+    return np.load(path, allow_pickle=True)
+
+
+def dataset_name(path):
+    """Prefix of the output JSON files: the dataset directory or legacy file name."""
+    path = os.path.normpath(path)
+    if os.path.isdir(path):
+        return os.path.basename(path)
+    if os.path.basename(path) == "train.npz":
+        return os.path.basename(os.path.dirname(path))
+    return os.path.splitext(os.path.basename(path))[0]
 
 
 def get_processing_data(data):
@@ -114,7 +133,7 @@ def main(args):
     path = args.path
     data = load_data(path)
     # exit()
-    base_name = os.path.basename(path)[:-4]
+    base_name = dataset_name(path)
     # print("Running GA on", base_name)
     # exit()
     runtimes = []
@@ -161,7 +180,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the GA on packed FJSP instances and export trajectories.")
 
     # Adding arguments
-    parser.add_argument('--path', type=str, required=True, help="path to dataset file")
+    parser.add_argument('--path', type=str, required=True, help="dataset directory or legacy .npy file")
     parser.add_argument('--output_path', type=str, required=True, help="path to output file")
     parser.add_argument('--seed', type=int, default=5, help="Seed for the GA")
     parser.add_argument('--population_size', type=int, default=200, help="Population size for the GA")

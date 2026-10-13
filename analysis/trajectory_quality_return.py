@@ -66,7 +66,7 @@ uses them.
 
 Run (all instances of one dataset):
 
-    python trajectory_quality_return.py --data dataset/SD1_train_10_5_1000.npy
+    python trajectory_quality_return.py --data fjsp/sd1_10x5
 
 All three SD1 sizes at once, writing every result to CSV:
 
@@ -110,6 +110,7 @@ import time
 import numpy as np
 import torch
 
+from cdqac.data import load_instance_dicts
 from env.fjsp_env_same_op_nums import FJSPEnvForSameOpNums
 
 
@@ -118,10 +119,10 @@ from env.fjsp_env_same_op_nums import FJSPEnvForSameOpNums
 # ---------------------------------------------------------------------------
 
 USED_PDR = [
-    "MWR_SPT_masked", "MWR_LPT_masked", "LWR_SPT_masked", "LWR_LPT_masked",
-    "MWR_EST_masked", "MWR_LST_masked", "LWR_EST_masked", "LWR_LST_masked",
-    "MOPNR_SPT_masked", "MOPNR_LPT_masked", "LOPNR_SPT_masked", "LOPNR_LPT_masked",
-    "MOPNR_EST_masked", "MOPNR_LST_masked", "LOPNR_EST_masked", "LOPNR_LST_masked",
+    "MWR_SPT", "MWR_LPT", "LWR_SPT", "LWR_LPT",
+    "MWR_EST", "MWR_LST", "LWR_EST", "LWR_LST",
+    "MOPNR_SPT", "MOPNR_LPT", "LOPNR_SPT", "LOPNR_LPT",
+    "MOPNR_EST", "MOPNR_LST", "LOPNR_EST", "LOPNR_LST",
 ]
 
 DATASET_TYPES = ["PDR", "GA", "PDR-GA", "Random"]
@@ -160,9 +161,9 @@ def scored_types(eps_versions=()):
     return DATASET_TYPES + eps_types(eps_versions)
 
 DEFAULT_ALL_DATASETS = [
-    "./dataset/SD1_train_10_5_1000.npy",
-    "./dataset/SD1_train_15_10_1000.npy",
-    "./dataset/SD1_train_20_10_500.npy",
+    "fjsp/sd1_10x5",
+    "fjsp/sd1_15x10",
+    "fjsp/sd1_20x10",
 ]
 
 # Quantiles of a source's per-instance return distribution, reported in TQ units alongside
@@ -611,7 +612,7 @@ def run_dataset(data_path, device, n_instances=None, n_ga=200, n_random=100, bat
     = that + ``ga_pop[:eps_ga_n]`` (check_coverage.py's composition), against the same
     per-instance anchors as the standard four types.
     """
-    data = np.load(data_path, allow_pickle=True)
+    data = load_instance_dicts(data_path)
     if n_instances is not None:
         data = data[:n_instances]
     data = _clamp_to_eps_instances(data, data_path, eps_versions)
@@ -682,7 +683,7 @@ def run_random_sweep_dataset(data_path, device, random_counts=(1, 5, 10, 25, 50,
     by ``n_random`` instead of dataset type.
     """
     random_counts = sorted(set(int(m) for m in random_counts))
-    data = np.load(data_path, allow_pickle=True)
+    data = load_instance_dicts(data_path)
     if n_instances is not None:
         data = data[:n_instances]
 
@@ -881,12 +882,16 @@ def write_random_sweep_summary_csv(rows, out_path, quantiles=DEFAULT_QUANTILES):
 # ---------------------------------------------------------------------------
 
 def _size_tag(data_path):
-    """'dataset/SD1_train_10_5_1000.npy' -> '10_5' (falls back to the file stem)."""
+    """'fjsp/sd1_10x5' or 'dataset/SD1_train_10_5_1000.npy' -> '10_5' (else the stem)."""
     stem = os.path.splitext(os.path.basename(data_path))[0]
     parts = stem.split("_")
     for i in range(len(parts) - 1):
         if parts[i].isdigit() and parts[i + 1].isdigit():
             return f"{parts[i]}_{parts[i + 1]}"
+    for part in parts:
+        n_j, sep, n_m = part.partition("x")
+        if sep and n_j.isdigit() and n_m.isdigit():
+            return f"{n_j}_{n_m}"
     return stem
 
 
@@ -974,8 +979,8 @@ def do_all_random_sweep_datasets(device, random_counts=(1, 5, 10, 25, 50, 100),
 def build_argparser():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--data", default="dataset/SD1_train_20_10_500.npy",
-                   help="Training dataset .npy (or 'all' for the three SD1 sizes)")
+    p.add_argument("--data", default="fjsp/sd1_20x10",
+                   help="Training dataset id or legacy .npy (or 'all' for the three SD1 sizes)")
     p.add_argument("--n_instances", type=int, default=-1,
                    help="Number of instances to score (-1 = all)")
     p.add_argument("--n_ga", type=int, default=200, help="GA trajectories per instance (ga_pop)")

@@ -139,6 +139,7 @@ import torch
 import torch.nn.functional as F
 
 from cdqac.network.main_model import ActorNet
+from cdqac.data import load_instance_dicts
 from env.fjsp_env_same_op_nums import FJSPEnvForSameOpNums
 
 
@@ -148,10 +149,10 @@ from env.fjsp_env_same_op_nums import FJSPEnvForSameOpNums
 
 # The 16 PDR rules used as the "PDR" dataset type in check_coverage.py.
 USED_PDR = [
-    "MWR_SPT_masked", "MWR_LPT_masked", "LWR_SPT_masked", "LWR_LPT_masked",
-    "MWR_EST_masked", "MWR_LST_masked", "LWR_EST_masked", "LWR_LST_masked",
-    "MOPNR_SPT_masked", "MOPNR_LPT_masked", "LOPNR_SPT_masked", "LOPNR_LPT_masked",
-    "MOPNR_EST_masked", "MOPNR_LST_masked", "LOPNR_EST_masked", "LOPNR_LST_masked",
+    "MWR_SPT", "MWR_LPT", "LWR_SPT", "LWR_LPT",
+    "MWR_EST", "MWR_LST", "LWR_EST", "LWR_LST",
+    "MOPNR_SPT", "MOPNR_LPT", "LOPNR_SPT", "LOPNR_LPT",
+    "MOPNR_EST", "MOPNR_LST", "LOPNR_EST", "LOPNR_LST",
 ]
 
 # The dataset types we score.  Order is meaningful for printing.
@@ -862,7 +863,7 @@ def run_dataset(model, normalizer, data_path, k_list, n_samples, device,
     competition keeps its original {PDR, GA, Random} pool (ε types get no ``nn_``
     columns), so those shares stay comparable to runs without ε.
     """
-    data = np.load(data_path, allow_pickle=True)
+    data = load_instance_dicts(data_path)
     if n_instances is not None:
         data = data[:n_instances]
     data = _clamp_to_eps_instances(data, data_path, eps_versions)
@@ -959,7 +960,7 @@ def run_random_sweep_dataset(model, normalizer, data_path, k_list, n_samples, de
     (instance, m); ``summary`` is ``{m: {'unique_traj','transitions','k': {k: {...}}}}``.
     """
     random_counts = sorted(set(int(m) for m in random_counts))
-    data = np.load(data_path, allow_pickle=True)
+    data = load_instance_dicts(data_path)
     if n_instances is not None:
         data = data[:n_instances]
 
@@ -1084,7 +1085,7 @@ def run_global_dataset(model, normalizer, data_path, k_list, n_samples, device,
     ε source, and the two top-k tables are merged losslessly.  The nearest-neighbour
     source competition keeps its original {PDR, GA, Random} pool.
     """
-    data = np.load(data_path, allow_pickle=True)
+    data = load_instance_dicts(data_path)
     data = _clamp_to_eps_instances(data, data_path, eps_versions)
     types = scored_types(eps_versions)
     n_query_inst = len(data) if n_instances is None else min(n_instances, len(data))
@@ -1228,7 +1229,7 @@ def run_global_random_sweep_dataset(model, normalizer, data_path, k_list, n_samp
     every row), not per-instance counts as in the local sweep.
     """
     random_counts = sorted(set(int(m) for m in random_counts))
-    data = np.load(data_path, allow_pickle=True)
+    data = load_instance_dicts(data_path)
     n_query_inst = len(data) if n_instances is None else min(n_instances, len(data))
     n_ref_inst = n_query_inst if ref_instances is None else min(ref_instances, len(data))
     kmax = max(k_list)
@@ -1472,19 +1473,23 @@ def write_random_sweep_summary_csv(rows, out_path):
 # ---------------------------------------------------------------------------
 
 DEFAULT_ALL_DATASETS = [
-    "./dataset/SD1_train_10_5_1000.npy",
-    "./dataset/SD1_train_15_10_1000.npy",
-    "./dataset/SD1_train_20_10_500.npy",
+    "fjsp/sd1_10x5",
+    "fjsp/sd1_15x10",
+    "fjsp/sd1_20x10",
 ]
 
 
 def _size_tag(data_path):
-    """'dataset/SD1_train_10_5_1000.npy' -> '10_5' (falls back to the file stem)."""
+    """'fjsp/sd1_10x5' or 'dataset/SD1_train_10_5_1000.npy' -> '10_5' (else the stem)."""
     stem = os.path.splitext(os.path.basename(data_path))[0]
     parts = stem.split("_")
     for i in range(len(parts) - 1):
         if parts[i].isdigit() and parts[i + 1].isdigit():
             return f"{parts[i]}_{parts[i + 1]}"
+    for part in parts:
+        n_j, sep, n_m = part.partition("x")
+        if sep and n_j.isdigit() and n_m.isdigit():
+            return f"{n_j}_{n_m}"
     return stem
 
 
@@ -1557,8 +1562,8 @@ def set_seed(seed, device):
 def build_argparser():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--data", default="dataset/SD1_train_20_10_500.npy",
-                   help="Training dataset .npy (or 'all' for the three SD1 sizes)")
+    p.add_argument("--data", default="fjsp/sd1_20x10",
+                   help="Training dataset id or legacy .npy (or 'all' for the three SD1 sizes)")
     p.add_argument("--checkpoint", default="checkpoints_dumb_exp/best_det_offline.pt")
     p.add_argument("--n_instances", type=int, default=50,
                    help="Number of instances to score (None/-1 = all)")

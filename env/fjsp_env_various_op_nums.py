@@ -14,11 +14,15 @@ class FJSPEnvForVariousOpNums:
     """
 
     def __init__(self, n_j, n_m, device='cpu', mask_actions=True):
+        """``mask_actions`` must be True: pairs that cannot start at the current decision time
+        are always masked (the argument is kept for compatibility with existing callers)."""
+        if not mask_actions:
+            raise ValueError("the action mask is always applied (the datasets and models assume "
+                             "it); mask_actions=False is not supported")
         self.number_of_jobs = n_j
         self.number_of_machines = n_m
         self.old_state = EnvState()
         self.old_state.device = torch.device(device)
-        self.mask_actions = mask_actions
 
         self.op_fea_dim = 10
         self.mch_fea_dim = 8
@@ -344,9 +348,9 @@ class FJSPEnvForVariousOpNums:
 
         self.unavailable_pairs = np.array([pair_free_time[k] > self.next_schedule_time[j]
                                            for k, j in enumerate(self.incomplete_env_idx)])
-        if self.mask_actions:
-            self.dynamic_pair_mask[self.incomplete_env_idx] = np.logical_or(self.dynamic_pair_mask[self.incomplete_env_idx],
-                                                                        self.unavailable_pairs)
+        # action mask: pairs that cannot start at the current decision time
+        self.dynamic_pair_mask[self.incomplete_env_idx] = np.logical_or(self.dynamic_pair_mask[self.incomplete_env_idx],
+                                                                    self.unavailable_pairs)
 
         self.comp_idx = self.logic_operator(~self.dynamic_pair_mask)
 

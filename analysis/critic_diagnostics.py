@@ -47,6 +47,7 @@ from quantile_distribution_experiment import (
     QRDQN_KWARGS, USED_PDR, Normalizer, load_critic, gather_trajectories, _style,
 )
 from cdqac.network.main_model import QRDQNNet  # noqa: F401  (kept for clarity)
+from cdqac.data import load_instance_dicts
 from env.fjsp_env_same_op_nums import FJSPEnvForSameOpNums
 from env.fjsp_env_various_op_nums import FJSPEnvForVariousOpNums
 
@@ -312,8 +313,8 @@ def build_argparser():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--checkpoint",
                    default="Quantile_critic/Check-fe9af749_seed_1/latest_check.pt")
-    p.add_argument("--data", default="dataset/SD1_train_10_5_1000.npy")
-    p.add_argument("--eval_data", default="dataset/SD1_10_5_eval.npy")
+    p.add_argument("--data", default="fjsp/sd1_10x5")
+    p.add_argument("--eval_data", default="fjsp/sd1_10x5")
     p.add_argument("--n_instances", type=int, default=40)
     p.add_argument("--n_ga", type=int, default=20)
     p.add_argument("--n_random", type=int, default=10)
@@ -329,12 +330,12 @@ def main():
     print(f"Device: {device} | checkpoint: {args.checkpoint}")
     model, normalizer = load_critic(args.checkpoint, device)
 
-    data = np.load(args.data, allow_pickle=True)
+    data = load_instance_dicts(args.data)
     stats = scan_diagnostics(model, normalizer, data, device,
                              n_instances=args.n_instances, n_ga=args.n_ga,
                              n_random=args.n_random, tail_q=args.tail_q, verbose=True)
 
-    eval_instances = np.load(args.eval_data, allow_pickle=True)
+    eval_instances = load_instance_dicts(args.eval_data, split="val")
     print(f"[diag] greedy eval on {len(eval_instances)} instances (rearrangement test) ...")
     ms_raw, n_dec, n_disagree, tie_gaps = rearrange_invariance(
         model, normalizer, eval_instances, device)
